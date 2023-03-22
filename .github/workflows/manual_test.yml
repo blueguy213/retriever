@@ -1,0 +1,97 @@
+# This is a basic workflow that is manually triggered
+
+name: Manual workflow
+
+# Controls when the action will run. Workflow runs when manually triggered using the UI
+# or API.
+on:
+  workflow_dispatch:
+    # Inputs the workflow accepts.
+    inputs:
+      name:
+        # Friendly description to be shown in the UI instead of 'name'
+        description: 'Person to greet'
+        # Default value if no value is explicitly provided
+        default: 'World'
+        # Input has to be provided for the workflow to run
+        required: true
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "greet"
+  greet:
+    # The type of runner that the job will run on
+    runs-on: ubuntu-latest
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+      - uses: actions/checkout@v2
+ 
+      - name: Set up Postgresql with Postgis
+        uses: huaxk/postgis-action@v1
+        with:
+          postgresql version: '11'
+          postgresql user: 'postgres'
+          postgresql password: 'Password12!'
+          postgresql db: 'testdb_retriever'
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v2
+        with:
+          python-version: ${{ matrix.python-version }}
+      
+      - name: Install dependencies
+        env:
+          LC_ALL : en_US.UTF-8
+          ENV LANG : en_US.UTF-8
+          ENV LANGUAGE : en_US.UTF-8
+          TZ: America/New_York
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-add-repository ppa:ubuntugis/ubuntugis-unstable
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends apt-utils
+          sudo apt-get install -y --force-yes tzdata
+          sudo apt-get install -y --force-yes build-essential wget git locales locales-all > /dev/null
+          sudo apt-get install -y --force-yes libpq-dev
+          sudo apt-get install libgdal-dev
+          sudo apt-get install gdal-bin
+          export CPLUS_INCLUDE_PATH=/usr/include/gdal
+          export C_INCLUDE_PATH=/usr/include/gdal
+          pip install GDAL==3.2.3 
+          sudo apt-get install -y --force-yes postgis
+          
+      - name: Setup paths and files
+        run : |
+          chmod 0755 cli_tools/entrypoint.sh
+          sh cli_tools/entrypoint.sh
+          echo "export PATH="/usr/bin/python:$PATH"" >> ~/.profile
+          echo "export PYTHONPATH="/usr/bin/python:$PYTHONPATH"" >> ~/.profile
+          echo "export PGPASSFILE="~/.pgpass"" >> ~/.profile
+          chmod 0644 ~/.profile
+      
+      - name: PostGIS check version
+        run : |
+          export PGPASSWORD='Password12!'
+          psql -d testdb_retriever -U postgres -h localhost -p 5432 -c "SELECT PostGIS_version();"
+      - name: Install python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install flake8 pytest yapf codecov pytest-cov pytest-xdist openpyxl -U
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      
+      - name: Install retriever
+        run: |
+          pip install -e .
+          export PGPASSFILE="~/.pgpass"
+          chmod 600 ~/.pgpass
+          chmod 600 ~/.my.cnf
+      - name: Run pytest
+        run: |
+          pytest -v -k "not test_geojson2csv  and not test_mysql_integration" --cov=./retriever --cov-report=xml
+          flake8 --ignore=E501,W503,E402,F401,F403,E722,F841,W504 retriever --max-line-length=90 2>&1
+          yapf -d --recursive ./retriever/ --style=.style.yapf 2>&1
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == 3.8
+        uses: codecov/codecov-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
